@@ -1,26 +1,41 @@
 {
   "name": "job-alert-app",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "24/7 real-time job alerts for C2C/W2 full-time Java Full-Stack & Frontend positions",
+  "main": "server.js",
+  "type": "commonjs",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/chandugoudk25k-afk/job-alert-app.git"
   },
-  "keywords": [],
+  "keywords": [
+    "jobs",
+    "alerts",
+    "c2c",
+    "w2",
+    "java",
+    "frontend",
+    "fullstack",
+    "socket.io",
+    "email"
+  ],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "bugs": {
     "url": "https://github.com/chandugoudk25k-afk/job-alert-app/issues"
   },
   "homepage": "https://github.com/chandugoudk25k-afk/job-alert-app#readme",
   "dependencies": {
-    "express": "^5.1.0",
+    "dotenv": "^17.2.1",
+    "express": "^4.19.2",
+    "nodemailer": "^6.9.11",
+    "pg": "^8.16.3",
     "redis": "^5.8.0",
+    "rss-parser": "^3.13.0",
     "socket.io": "^4.8.1"
   }
 }

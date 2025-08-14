@@ -1,81 +1,101 @@
 // server.js
-require('./worker.js')
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const { createClient } = require("redis");
+require('dotenv').config();
 
-const PORT = process.env.PORT || 3000;
-const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
+const express = require('express');
+const http = require('http');
+const cors = require('cors');
+const db = require('./db');
 
-async function main() {
-  const app = express();
-  const server = http.createServer(app);
-  const io = new Server(server, {
-    cors: { origin: "*" }
-  });
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-  // Simple page to test realtime
-  app.get("/", (_, res) => {
-    res.setHeader("content-type", "text/html");
-    res.end(`
-<!doctype html>
-<html>
-  <head><meta charset="utf-8"><title>Job Alerts</title></head>
-  <body>
-    <h2>Realtime Job Alerts</h2>
-    <p>Connected as <b>user: demo</b></p>
-    <ul id="feed"></ul>
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-      const socket = io("/", { auth: { userId: "demo" } });
-      socket.on("connect", () => console.log("connected", socket.id));
-      socket.on("job_notification", (msg) => {
-        const li = document.createElement("li");
-        li.textContent = JSON.stringify(msg);
-        document.getElementById("feed").appendChild(li);
-      });
-    </script>
-  </body>
-</html>
-    `);
-  });
+const server = http.createServer(app);
 
-  app.get("/health", (_, res) => res.json({ ok: true }));
+// Socket.io (optional, for realtime job push)
+const io = require('socket.io')(server, {
+  cors: { origin: '*' }
+});
 
-  // Map sockets to a user room
-  io.on("connection", (socket) => {
-    const userId = (socket.handshake.auth && socket.handshake.auth.userId) || "demo";
-    socket.join(`user:${userId}`);
-  });
-
-  // Redis pub/sub: pSubscribe to notifications:<userId>
-  const sub = createClient({ url: REDIS_URL });
-  sub.on("error", (e) => console.error("Redis sub error:", e));
-  await sub.connect();
-  await sub.pSubscribe("notifications:*", (message, channel) => {
-    try {
-      const payload = JSON.parse(message);
-      const userRoom = `user:${channel.split(":")[1]}`; // "notifications:<userId>"
-      // Emit to that user's room
-      io.to(userRoom).emit("job_notification", payload);
-    } catch (e) {
-      console.error("Failed to handle message:", e);
-    }
-  });
-
-  server.listen(PORT, () => {
-    console.log(`Web server listening on http://localhost:${PORT}`);
-  });
-
-  // Graceful shutdown
-  process.on("SIGINT", async () => {
-    try { await sub.quit(); } catch {}
-    process.exit(0);
-  });
+// Load worker (it may start itself on import)
+let bus, scanNow;
+try {
+  ({ bus, scanNow } = require('./worker')); // expect worker to export { bus, scanNow }
+} catch (e) {
+  console.warn('Worker load warning:', e.message);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
+// DB health check at startup (uses shared pool)
+(async () => {
+  try {
+    await db.query('SELECT 1');
+    console.log('✅ Postgres reachable');
+  } catch (e) {
+    console.error('❌ Postgres connection error', e);
+  }
+})();
+
+// Basic routes
+app.get('/', (_req, res) => res.send('OK'));
+
+app.post('/scanNow', async (_req, res) => {
+  try {
+    if (typeof scanNow === 'function') {
+      await scanNow();
+      return res.json({ ok: true });
+    }
+    return res.status(501).json({ ok: false, error: 'scanNow not available' });
+  } catch (e) {
+    console.error('scanNow failed:', e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// --- DEBUG: list tables and peek data ---
+app.get('/debug/schema', async (_req, res) => {
+  try {
+    const tables = await db.query(
+      `SELECT table_name
+       FROM information_schema.tables
+       WHERE table_schema='public'
+       ORDER BY 1`
+    );
+    res.json({ tables: tables.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/debug/jobs', async (_req, res) => {
+  try {
+    const rows = await db.query(
+      `SELECT id, source, title, company, location, fetched_at
+       FROM job
+       ORDER BY fetched_at DESC
+       LIMIT 20`
+    );
+    res.json(rows.rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Realtime: forward worker bus events to clients (if worker exports a bus)
+io.on('connection', (socket) => {
+  console.log('socket connected', socket.id);
+  socket.on('subscribe', (filter) => {
+    socket.data.filter = filter;
+    socket.emit('subscribed', filter);
+  });
+});
+
+if (bus && bus.on) {
+  bus.on('job', (j) => io.emit('job', j));
+  bus.on('stats', (s) => io.emit('stats', s));
+}
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server up at http://localhost:${PORT}`);
 });
